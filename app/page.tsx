@@ -1,7 +1,7 @@
-  'use client'                                                                                                                                                                                                    
-                  
-  import { useState, useRef, useEffect } from 'react'                                                                                                                                                             
-                  
+  'use client'
+
+  import { useState, useRef, useEffect } from 'react'
+
   type FilterMode = 'not-contacted' | 'contacted'
   type DisplayMode = 'both' | 'emails' | 'domains' | 'linkedin' | 'all'
 
@@ -179,6 +179,7 @@
         .finally(() => setLoadingWorkspaces(false))
     }, [selectedInstance])
 
+    // FIX: added selectedInstance to dependency array to prevent stale closure
     useEffect(() => {
       if (!selectedInstance || !selectedWorkspace) {
         setCampaigns([])
@@ -201,7 +202,7 @@
         .then(data => setCampaigns(data.campaigns || []))
         .catch(() => setCampaigns([]))
         .finally(() => setLoadingCampaigns(false))
-    }, [selectedWorkspace])
+    }, [selectedWorkspace, selectedInstance])
 
     function saveInstance(): void {
       const name = instName.trim()
@@ -315,14 +316,18 @@
           buf = lines.pop() || ''
           for (const line of lines) {
             if (!line.trim()) continue
+            // FIX: only swallow JSON parse errors, rethrow real API errors
+            let parsed: any
             try {
-              const parsed = JSON.parse(line)
-              if (parsed.error) throw new Error(parsed.error)
-              for (const l of (parsed.leads || [])) allLeads.push(l)
-              setProgressCurrent(parsed.page || 0)
-              setProgressTotal(parsed.lastPage || parsed.page || 0)
-              setProgressStatus(`Page ${parsed.page} of ${parsed.lastPage || '?'}`)
-            } catch { /* skip bad lines */ }
+              parsed = JSON.parse(line)
+            } catch {
+              continue // skip malformed lines
+            }
+            if (parsed.error) throw new Error(parsed.error)
+            for (const l of (parsed.leads || [])) allLeads.push(l)
+            setProgressCurrent(parsed.page || 0)
+            setProgressTotal(parsed.lastPage || parsed.page || 0)
+            setProgressStatus(`Page ${parsed.page} of ${parsed.lastPage || '?'}`)
           }
         }
 
