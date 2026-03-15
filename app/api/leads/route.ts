@@ -1,41 +1,47 @@
- import { NextRequest } from 'next/server'
+  import { NextRequest } from 'next/server'
 
-  const BASE = 'https://personal.buzzlead.io/api'
+  export const maxDuration = 300
 
   export async function GET(req: NextRequest) {
     const apiKey = req.headers.get('x-api-key')
-    if (!apiKey) return new Response('API key required', { status: 400 })
+    const baseUrl = req.headers.get('x-base-url') || 'https://personal.buzzlead.io'
+    const workspaceId = req.headers.get('x-workspace-id')
 
-    const enc = new TextEncoder()
-    let closed = false
+    if (!apiKey) {
+      return new Response(JSON.stringify({ error: 'No API key' }) + '\n', { status: 401 })
+    }
 
+    const encoder = new TextEncoder()
     const stream = new ReadableStream({
       async start(controller) {
-        const send = (data: object) => {
-          if (!closed) controller.enqueue(enc.encode(JSON.stringify(data) + '\n'))
-        }
         try {
-          let page = 1, lastPage = 1
-          do {
-            const res = await fetch(`${BASE}/leads?page=${page}`, {
+          let page = 1
+          while (true) {
+            const url = new URL(`${baseUrl}/api/leads`)
+            url.searchParams.set('page', String(page))
+            url.searchParams.set('per_page', '15')
+            if (workspaceId) url.searchParams.set('team_id', workspaceId)
+            const res = await fetch(url.toString(), {
               headers: { Authorization: `Bearer ${apiKey}` },
             })
-            if (!res.ok) { send({ error: `EmailBison API error: ${res.status}` }); break }
+            if (!res.ok) {
+              controller.enqueue(encoder.encode(JSON.stringify({ error: `API returned ${res.status}` }) + '\n'))
+              break
+            }
             const data = await res.json()
-            lastPage = data.meta?.last_page ?? page
-            send({ leads: data.data ?? [], page, lastPage })
+            const leads = data.data || []
+            const lastPage = data.meta?.last_page || page
+            controller.enqueue(encoder.encode(JSON.stringify({ leads, page, lastPage }) + '\n'))
+            if (page >= lastPage || leads.length === 0) break
             page++
-          } while (page <= lastPage)
+          }
         } catch (err) {
-          try { if (!closed) controller.enqueue(enc.encode(JSON.stringify({ error: String(err) }) + '\n')) } catch {}
+          controller.enqueue(encoder.encode(JSON.stringify({ error: String(err) }) + '\n'))
         } finally {
-          closed = true
-          try { controller.close() } catch {}
+          controller.close()
         }
       },
-      cancel() { closed = true },
     })
 
-    return new Response(stream, { headers: { 'Content-Type': 'text/plain; charset=utf-8' } })
+    return new Response(stream, { headers: { 'Content-Type': 'application/x-ndjson' } })
   }
-
