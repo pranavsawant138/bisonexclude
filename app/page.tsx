@@ -1,4 +1,4 @@
-  'use client'
+ 'use client'
 
   import { useState, useRef, useEffect } from 'react'
 
@@ -18,6 +18,7 @@
     last_emailed_at?: string
     custom_variables?: Array<{ name: string; value: string }>
     lead_campaign_data?: Array<{ campaign_id: number; status: string }>
+    tags?: Array<{ id: number; name: string }>
   }
 
   interface ProcessedLead {
@@ -35,6 +36,7 @@
     website: string
     employeeCount: string
     customVars: Record<string, string>
+    tagIds: number[]
   }
 
   interface Instance {
@@ -52,6 +54,11 @@
     id: number
     name: string
     status: string
+  }
+
+  interface Tag {
+    id: number
+    name: string
   }
 
   function extractDomain(email: string): string {
@@ -134,6 +141,13 @@
     const [campaignDropdownOpen, setCampaignDropdownOpen] = useState(false)
     const campaignDropdownRef = useRef<HTMLDivElement>(null)
 
+    const [tags, setTags] = useState<Tag[]>([])
+    const [selectedTagIds, setSelectedTagIds] = useState<Set<number>>(new Set())
+    const [loadingTags, setLoadingTags] = useState(false)
+    const [tagDropdownOpen, setTagDropdownOpen] = useState(false)
+    const [tagSearch, setTagSearch] = useState('')
+    const tagDropdownRef = useRef<HTMLDivElement>(null)
+
     const [filterMode, setFilterMode] = useState<FilterMode>('not-contacted')
     const [days, setDays] = useState<string>('')
     const [dateField, setDateField] = useState<'updated_at' | 'created_at'>('updated_at')
@@ -153,6 +167,9 @@
         if (campaignDropdownRef.current && !campaignDropdownRef.current.contains(e.target as Node)) {
           setCampaignDropdownOpen(false)
         }
+        if (tagDropdownRef.current && !tagDropdownRef.current.contains(e.target as Node)) {
+          setTagDropdownOpen(false)
+        }
       }
       document.addEventListener('mousedown', handleClickOutside)
       return () => document.removeEventListener('mousedown', handleClickOutside)
@@ -168,6 +185,8 @@
       setSelectedWorkspace(null)
       setCampaigns([])
       setSelectedCampaignIds(new Set())
+      setTags([])
+      setSelectedTagIds(new Set())
       setLeads([])
       setProgressStatus('')
       fetch('/api/workspaces', {
@@ -179,29 +198,40 @@
         .finally(() => setLoadingWorkspaces(false))
     }, [selectedInstance])
 
-    // FIX: added selectedInstance to dependency array to prevent stale closure
     useEffect(() => {
       if (!selectedInstance || !selectedWorkspace) {
         setCampaigns([])
         setSelectedCampaignIds(new Set())
+        setTags([])
+        setSelectedTagIds(new Set())
         return
       }
+
+      const headers = {
+        'x-api-key': selectedInstance.apiKey,
+        'x-base-url': selectedInstance.baseUrl,
+        'x-workspace-id': String(selectedWorkspace.id),
+      }
+
       setLoadingCampaigns(true)
       setCampaigns([])
       setSelectedCampaignIds(new Set())
       setLeads([])
       setProgressStatus('')
-      fetch('/api/campaigns', {
-        headers: {
-          'x-api-key': selectedInstance.apiKey,
-          'x-base-url': selectedInstance.baseUrl,
-          'x-workspace-id': String(selectedWorkspace.id),
-        },
-      })
+      fetch('/api/campaigns', { headers })
         .then(r => r.json())
         .then(data => setCampaigns(data.campaigns || []))
         .catch(() => setCampaigns([]))
         .finally(() => setLoadingCampaigns(false))
+
+      setLoadingTags(true)
+      setTags([])
+      setSelectedTagIds(new Set())
+      fetch('/api/tags', { headers })
+        .then(r => r.json())
+        .then(data => setTags(data.tags || []))
+        .catch(() => setTags([]))
+        .finally(() => setLoadingTags(false))
     }, [selectedWorkspace, selectedInstance])
 
     function saveInstance(): void {
@@ -231,6 +261,23 @@
         else next.add(id)
         return next
       })
+    }
+
+    function toggleTag(id: number): void {
+      setSelectedTagIds(prev => {
+        const next = new Set(prev)
+        if (next.has(id)) next.delete(id)
+        else next.add(id)
+        return next
+      })
+    }
+
+    function selectAllTags(): void {
+      setSelectedTagIds(new Set(tags.map(t => t.id)))
+    }
+
+    function clearAllTags(): void {
+      setSelectedTagIds(new Set())
     }
 
     function buildDisplayItems(processedLeads: ProcessedLead[], mode: DisplayMode): string[] {
@@ -316,12 +363,11 @@
           buf = lines.pop() || ''
           for (const line of lines) {
             if (!line.trim()) continue
-            // FIX: only swallow JSON parse errors, rethrow real API errors
             let parsed: any
             try {
               parsed = JSON.parse(line)
             } catch {
-              continue // skip malformed lines
+              continue
             }
             if (parsed.error) throw new Error(parsed.error)
             for (const l of (parsed.leads || [])) allLeads.push(l)
@@ -347,8 +393,10 @@
           if (emailSeen.has(email)) continue
 
           const leadCampaignIds = (lead.lead_campaign_data || []).map(d => d.campaign_id)
-
           if (selectedCampaignIds.size > 0 && !leadCampaignIds.some(id => selectedCampaignIds.has(id))) continue
+
+          const leadTagIds = (lead.tags || []).map(t => t.id)
+          if (selectedTagIds.size > 0 && !leadTagIds.some(id => selectedTagIds.has(id))) continue
 
           if (cutoff) {
             const lastContacted = getLeadDate(lead, dateField)
@@ -382,6 +430,7 @@
             website: customVars['website'] || '',
             employeeCount: customVars['employee count'] || '',
             customVars,
+            tagIds: leadTagIds,
           })
         }
 
@@ -413,6 +462,7 @@
       setTimeout(() => setCopiedIdx(-1), 1500)
     }
 
+    const filteredTags = tags.filter(t => t.name.toLowerCase().includes(tagSearch.toLowerCase()))
     const displayItems = leads.length > 0 ? buildDisplayItems(leads, displayMode) : []
     const chunks = chunkStrings(displayItems, 10000)
     const uniqueDomainsCount = new Set(leads.map(l => l.domain).filter(Boolean)).size
@@ -501,6 +551,8 @@
               Select Workspace — <span className="text-blue-600">{selectedInstance.name}</span>
             </h2>
             <div className="flex gap-4 flex-wrap items-end">
+
+              {/* Workspace */}
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">Client Workspace</label>
                 {loadingWorkspaces ? (
@@ -519,16 +571,17 @@
                 )}
               </div>
 
+              {/* Campaigns */}
               {selectedWorkspace && (
                 <div className="space-y-1.5" ref={campaignDropdownRef}>
                   <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">Campaigns</label>
                   {loadingCampaigns ? (
-                    <div className="text-sm text-gray-400 py-2">Loading campaigns...</div>
+                    <div className="text-sm text-gray-400 py-2">Loading...</div>
                   ) : (
                     <div className="relative">
                       <button
-                        onClick={() => setCampaignDropdownOpen(!campaignDropdownOpen)}
-                        className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white text-gray-700 min-w-52 text-left flex items-center justify-between gap-2 focus:ring-2 focus:ring-blue-500
+                        onClick={() => { setCampaignDropdownOpen(!campaignDropdownOpen); setTagDropdownOpen(false) }}
+                        className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white text-gray-700 min-w-48 text-left flex items-center justify-between gap-2 focus:ring-2 focus:ring-blue-500
   outline-none"
                       >
                         <span>
@@ -567,6 +620,83 @@
                   )}
                 </div>
               )}
+
+              {/* Tags */}
+              {selectedWorkspace && (
+                <div className="space-y-1.5" ref={tagDropdownRef}>
+                  <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">Tags</label>
+                  {loadingTags ? (
+                    <div className="text-sm text-gray-400 py-2">Loading...</div>
+                  ) : (
+                    <div className="relative">
+                      <button
+                        onClick={() => { setTagDropdownOpen(!tagDropdownOpen); setCampaignDropdownOpen(false) }}
+                        className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white text-gray-700 min-w-48 text-left flex items-center justify-between gap-2 focus:ring-2 focus:ring-blue-500
+  outline-none"
+                      >
+                        <span>
+                          {selectedTagIds.size === 0
+                            ? 'All Tags'
+                            : `${selectedTagIds.size} tag${selectedTagIds.size > 1 ? 's' : ''} selected`}
+                        </span>
+                        <span className="text-gray-400 text-xs">▾</span>
+                      </button>
+                      {tagDropdownOpen && (
+                        <div className="absolute top-full mt-1 left-0 bg-white border border-gray-200 rounded-lg shadow-lg z-20 w-72">
+                          {/* Search */}
+                          <div className="p-2 border-b border-gray-100">
+                            <input
+                              type="text"
+                              placeholder="Search tags..."
+                              value={tagSearch}
+                              onChange={e => setTagSearch(e.target.value)}
+                              className="w-full border border-gray-200 rounded-md px-2.5 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                              autoFocus
+                            />
+                          </div>
+                          {/* Select All / Clear */}
+                          <div className="flex gap-0 border-b border-gray-100">
+                            <button
+                              onClick={selectAllTags}
+                              className="flex-1 px-3 py-2 text-xs font-medium text-blue-600 hover:bg-blue-50 transition-colors"
+                            >
+                              Select All
+                            </button>
+                            <div className="w-px bg-gray-100" />
+                            <button
+                              onClick={clearAllTags}
+                              className="flex-1 px-3 py-2 text-xs font-medium text-gray-500 hover:bg-gray-50 transition-colors"
+                            >
+                              Clear
+                            </button>
+                          </div>
+                          {/* Tag list */}
+                          <div className="max-h-56 overflow-y-auto">
+                            {tags.length === 0 ? (
+                              <div className="px-3 py-4 text-sm text-gray-400 text-center">No tags found</div>
+                            ) : filteredTags.length === 0 ? (
+                              <div className="px-3 py-4 text-sm text-gray-400 text-center">No matches</div>
+                            ) : (
+                              filteredTags.map(t => (
+                                <label key={t.id} className="flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedTagIds.has(t.id)}
+                                    onChange={() => toggleTag(t.id)}
+                                    className="rounded"
+                                  />
+                                  <span className="flex-1 leading-snug">{t.name}</span>
+                                </label>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
             </div>
           </div>
         )}
