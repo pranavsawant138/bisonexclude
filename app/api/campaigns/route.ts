@@ -1,6 +1,6 @@
  import { NextRequest, NextResponse } from 'next/server'
 
-  const BASE = 'https://dedi.emailbison.com/api'
+  const BASE = 'https://app.emailbison.com/api'
 
   export async function GET(req: NextRequest) {
     const apiKey = req.headers.get('x-api-key')
