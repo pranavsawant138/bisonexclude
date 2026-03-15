@@ -1,28 +1,31 @@
- import { NextRequest, NextResponse } from 'next/server'
-
-  const BASE = 'https://personal.buzzlead.io/api'
+  import { NextRequest } from 'next/server'
 
   export async function GET(req: NextRequest) {
     const apiKey = req.headers.get('x-api-key')
-    if (!apiKey) return NextResponse.json({ error: 'API key required' }, { status: 400 })
+    const baseUrl = req.headers.get('x-base-url') || 'https://personal.buzzlead.io'
+    const workspaceId = req.headers.get('x-workspace-id')
+
+    if (!apiKey) return Response.json({ error: 'No API key' }, { status: 401 })
 
     try {
-      const campaigns: any[] = []
-      let page = 1, lastPage = 1
-      do {
-        const res = await fetch(`${BASE}/campaigns?page=${page}`, {
+      const allCampaigns: unknown[] = []
+      let page = 1
+      while (true) {
+        const url = new URL(`${baseUrl}/api/campaigns`)
+        url.searchParams.set('page', String(page))
+        if (workspaceId) url.searchParams.set('team_id', workspaceId)
+        const res = await fetch(url.toString(), {
           headers: { Authorization: `Bearer ${apiKey}` },
         })
         if (!res.ok) break
         const data = await res.json()
-        campaigns.push(...(data.data ?? []))
-        lastPage = data.meta?.last_page ?? page
+        const campaigns = data.data || []
+        for (const c of campaigns) allCampaigns.push(c)
+        if (!data.links?.next || campaigns.length === 0) break
         page++
-      } while (page <= lastPage)
-
-      return NextResponse.json({ campaigns })
+      }
+      return Response.json({ campaigns: allCampaigns })
     } catch (err) {
-      return NextResponse.json({ error: String(err) }, { status: 500 })
+      return Response.json({ error: String(err) }, { status: 500 })
     }
   }
-
