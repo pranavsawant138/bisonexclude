@@ -1,7 +1,7 @@
-  'use client'
-
-  import { useState, useRef, useEffect } from 'react'
-
+ 'use client'                                                                                                                                                                                                                                                               
+   
+  import { useState, useRef, useEffect } from 'react'                                                                                                                                                                                                                        
+                  
   type FilterMode = 'not-contacted' | 'contacted'
   type DisplayMode = 'both' | 'emails' | 'domains' | 'linkedin' | 'all'
 
@@ -32,6 +32,8 @@
     campaignNames: string[]
     linkedinUrl: string
     companyLinkedinUrl: string
+    website: string
+    employeeCount: string
     customVars: Record<string, string>
   }
 
@@ -51,8 +53,6 @@
     name: string
     status: string
   }
-
-  const FIXED_CUSTOM_VAR_NAMES = new Set(['person linkedin', 'company linkedin url'])
 
   function extractDomain(email: string): string {
     const at = email.indexOf('@')
@@ -250,23 +250,20 @@
       }
 
       if (mode === 'all') {
-        const extraNames = new Set<string>()
-        for (const l of processedLeads) {
-          for (const k of Object.keys(l.customVars)) {
-            if (!FIXED_CUSTOM_VAR_NAMES.has(k)) extraNames.add(k)
-          }
-        }
-        const extraArr = Array.from(extraNames).sort()
-        const header = [
-          'Email', 'First Name', 'Last Name', 'Company', 'Title', 'Domain',
-          'Person LinkedIn', 'Company LinkedIn', 'Date', ...extraArr,
-        ].join('\t')
-        const rows = processedLeads.map(l => [
-          l.email, l.firstName, l.lastName, l.company, l.title, l.domain,
-          l.linkedinUrl, l.companyLinkedinUrl, formatDate(l.lastContacted),
-          ...extraArr.map(n => l.customVars[n] || ''),
+        return processedLeads.map(l => [
+          l.email,
+          l.firstName,
+          l.lastName,
+          l.company,
+          l.title,
+          l.domain,
+          l.website,
+          l.employeeCount,
+          l.linkedinUrl,
+          l.companyLinkedinUrl,
+          formatDate(l.lastContacted),
+          l.campaignNames.join(', '),
         ].join('\t'))
-        return [header, ...rows]
       }
 
       // 'both'
@@ -340,10 +337,8 @@
 
           const leadCampaignIds = (lead.lead_campaign_data || []).map(d => d.campaign_id)
 
-          // Campaign filter
           if (selectedCampaignIds.size > 0 && !leadCampaignIds.some(id => selectedCampaignIds.has(id))) continue
 
-          // Date filter (only if days is set)
           if (cutoff) {
             const lastContacted = getLeadDate(lead, dateField)
             let include: boolean
@@ -357,8 +352,6 @@
 
           const lastContacted = getLeadDate(lead, dateField)
           const domain = extractDomain(email)
-          const linkedinUrl = getCustomVar(lead, 'person linkedin')
-          const companyLinkedinUrl = getCustomVar(lead, 'company linkedin url')
           const customVars: Record<string, string> = {}
           for (const cv of (lead.custom_variables || [])) customVars[cv.name] = cv.value
 
@@ -373,8 +366,10 @@
             lastContacted,
             campaignIds: leadCampaignIds,
             campaignNames: leadCampaignIds.map(id => campaignMap[id]).filter(Boolean),
-            linkedinUrl,
-            companyLinkedinUrl,
+            linkedinUrl: customVars['person linkedin'] || '',
+            companyLinkedinUrl: customVars['company linkedin url'] || '',
+            website: customVars['website'] || '',
+            employeeCount: customVars['employee count'] || '',
             customVars,
           })
         }
@@ -415,13 +410,11 @@
     return (
       <div className="max-w-7xl mx-auto p-6 space-y-5">
 
-        {/* Header */}
         <div className="bg-white rounded-xl border border-gray-200 p-6">
           <h1 className="text-2xl font-bold text-gray-900">EmailBison Dashboard</h1>
           <p className="text-sm text-gray-500 mt-1">Filter leads, extract domains, export in bulk — read-only</p>
         </div>
 
-        {/* Instances */}
         <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
           <h2 className="text-base font-semibold text-gray-800">Instances</h2>
           <div className="flex gap-3 flex-wrap items-center">
@@ -491,7 +484,6 @@
           )}
         </div>
 
-        {/* Workspace + Campaign */}
         {selectedInstance && (
           <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
             <h2 className="text-base font-semibold text-gray-800">
@@ -525,8 +517,7 @@
                     <div className="relative">
                       <button
                         onClick={() => setCampaignDropdownOpen(!campaignDropdownOpen)}
-                        className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white text-gray-700 min-w-52 text-left flex items-center justify-between gap-2 focus:ring-2 focus:ring-blue-500
-  outline-none"
+                        className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white text-gray-700 min-w-52 text-left flex items-center justify-between gap-2 focus:ring-2 focus:ring-blue-500 outline-none"
                       >
                         <span>
                           {selectedCampaignIds.size === 0 ? 'All Campaigns' : `${selectedCampaignIds.size} campaign${selectedCampaignIds.size > 1 ? 's' : ''} selected`}
@@ -568,7 +559,6 @@
           </div>
         )}
 
-        {/* Filters */}
         {selectedInstance && selectedWorkspace && (
           <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
             <h2 className="text-base font-semibold text-gray-800">
@@ -718,7 +708,7 @@
                 {displayMode === 'domains' ? 'domains' : displayMode === 'emails' ? 'emails' : displayMode === 'linkedin' ? 'LinkedIn URLs' : 'entries'}
               </h2>
               {displayMode === 'both' && <span className="text-xs text-gray-400">email · domain · date · campaign</span>}
-              {displayMode === 'all' && <span className="text-xs text-gray-400">all fields — first row is header</span>}
+              {displayMode === 'all' && <span className="text-xs text-gray-400">email · first name · last name · company · title · domain · website · employee count · linkedin · company linkedin · date · campaigns</span>}
             </div>
 
             <div className={
