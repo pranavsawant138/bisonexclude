@@ -1,5 +1,5 @@
-  'use client'                                                                                                                                                                                                                                                               
-                  
+ 'use client'                                                                                                                                                                                                                                                               
+                                                                                                                                                                                                                                                                             
   import { useState, useRef } from 'react'                                                                                                                                                                                                                                   
                   
   type FilterMode = 'not-contacted' | 'contacted'
@@ -120,6 +120,7 @@
     const [progressStatus, setProgressStatus] = useState<string>('')
     const [errorMsg, setErrorMsg] = useState<string>('')
     const [copiedIdx, setCopiedIdx] = useState<number>(-1)
+    const [debugLead, setDebugLead] = useState<string>('')
     const abortRef = useRef<AbortController | null>(null)
 
     function addWorkspace(): void {
@@ -176,6 +177,7 @@
       setProgressCurrent(0)
       setProgressTotal(0)
       setProgressStatus('Fetching campaigns...')
+      setDebugLead('')
       abortRef.current = new AbortController()
       const signal = abortRef.current.signal
 
@@ -202,6 +204,7 @@
         const dec = new TextDecoder()
         let buf = ''
         const allLeads: RawLead[] = []
+        let debugSet = false
 
         while (true) {
           const readResult = await reader.read()
@@ -216,7 +219,13 @@
               const parsed = JSON.parse(line)
               if (parsed.error) throw new Error(parsed.error)
               const newLeads: RawLead[] = parsed.leads || []
-              for (const l of newLeads) allLeads.push(l)
+              for (const l of newLeads) {
+                allLeads.push(l)
+                if (!debugSet) {
+                  setDebugLead(JSON.stringify(l, null, 2))
+                  debugSet = true
+                }
+              }
               setProgressCurrent(parsed.page || 0)
               setProgressTotal(parsed.lastPage || parsed.page || 0)
               setProgressStatus('Page ' + parsed.page + ' of ' + (parsed.lastPage || '?'))
@@ -506,6 +515,13 @@
 
         {errorMsg !== '' && (
           <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">{errorMsg}</div>
+        )}
+
+        {debugLead !== '' && (
+          <details className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
+            <summary className="text-sm font-medium text-yellow-800 cursor-pointer">Debug: First Lead Raw JSON (click to expand)</summary>
+            <pre className="mt-2 text-xs text-yellow-900 overflow-auto max-h-96">{debugLead}</pre>
+          </details>
         )}
 
         {leads.length > 0 && (
