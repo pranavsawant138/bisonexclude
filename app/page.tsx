@@ -94,6 +94,7 @@
     const [filterMode, setFilterMode] = useState<FilterMode>('not-contacted')
     const [days, setDays] = useState<number>(90)
     const [displayMode, setDisplayMode] = useState<DisplayMode>('both')
+    const [dateField, setDateField] = useState<'updated_at' | 'created_at'>('updated_at')
     const [leads, setLeads] = useState<ProcessedLead[]>([])
     const [loading, setLoading] = useState<boolean>(false)
     const [progressCurrent, setProgressCurrent] = useState<number>(0)
