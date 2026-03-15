@@ -1,9 +1,9 @@
- 'use client'                                                                                                                                                                                                    
-                  
-  import { useState, useRef } from 'react'                                                                                                                                                                        
+ 'use client'                                                                                                                                                                                                                                                               
+                                                                                                                                                                                                                                                                             
+  import { useState, useRef } from 'react'                                                                                                                                                                                                                                   
                   
   type FilterMode = 'not-contacted' | 'contacted'
-  type DisplayMode = 'both' | 'emails' | 'domains'
+  type DisplayMode = 'both' | 'all' | 'emails' | 'domains' | 'linkedin'
 
   interface RawLead {
     id: number
@@ -12,6 +12,7 @@
     created_at?: string
     last_contacted_at?: string
     last_emailed_at?: string
+    person_linkedin?: string
     campaigns?: Array<{ id: number; name: string }>
     campaign?: { id: number; name: string } | string
   }
@@ -21,6 +22,7 @@
     domain: string
     lastContacted: Date | null
     campaignNames: string[]
+    linkedinUrl: string
   }
 
   interface Workspace {
@@ -84,8 +86,10 @@
 
   const DISPLAY_OPTIONS: Array<{ value: DisplayMode; label: string }> = [
     { value: 'both', label: 'Emails + Domains' },
+    { value: 'all', label: 'Emails + Domains + LinkedIn' },
     { value: 'emails', label: 'Emails only' },
     { value: 'domains', label: 'Domains only' },
+    { value: 'linkedin', label: 'LinkedIn only' },
   ]
 
   export default function Dashboard() {
@@ -140,9 +144,20 @@
         }
         return out
       }
-      return processedLeads.map(l => {
-        return [l.email, l.domain, formatDate(l.lastContacted), l.campaignNames.join(', ')].join('\t')
-      })
+      if (mode === 'linkedin') {
+        return processedLeads
+          .map(l => l.linkedinUrl)
+          .filter(url => url !== '')
+      }
+      if (mode === 'all') {
+        return processedLeads.map(l =>
+          [l.email, l.domain, l.linkedinUrl, formatDate(l.lastContacted), l.campaignNames.join(', ')].join('\t')
+        )
+      }
+      // 'both'
+      return processedLeads.map(l =>
+        [l.email, l.domain, formatDate(l.lastContacted), l.campaignNames.join(', ')].join('\t')
+      )
     }
 
     async function doFetch(): Promise<void> {
@@ -224,6 +239,7 @@
           if (!include) continue
 
           const domain = extractDomain(email)
+          const linkedinUrl = lead.person_linkedin || ''
           const campaignNames: string[] = []
 
           if (Array.isArray(lead.campaigns)) {
@@ -242,7 +258,7 @@
           }
 
           emailSeen.add(email)
-          processed.push({ email, domain, lastContacted, campaignNames })
+          processed.push({ email, domain, lastContacted, campaignNames, linkedinUrl })
         }
 
         processed.sort((a, b) => {
@@ -514,10 +530,13 @@
                 {'Results — '}
                 {displayItems.length.toLocaleString()}
                 {' '}
-                {displayMode === 'domains' ? 'domains' : displayMode === 'emails' ? 'emails' : 'entries'}
+                {displayMode === 'domains' ? 'domains' : displayMode === 'emails' ? 'emails' : displayMode === 'linkedin' ? 'LinkedIn URLs' : 'entries'}
               </h2>
               {displayMode === 'both' && (
                 <span className="text-xs text-gray-400">email · domain · last contacted · campaign</span>
+              )}
+              {displayMode === 'all' && (
+                <span className="text-xs text-gray-400">email · domain · linkedin · last contacted · campaign</span>
               )}
             </div>
 
