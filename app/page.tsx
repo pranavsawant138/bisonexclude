@@ -1,35 +1,58 @@
-  'use client'                                                                                                                                                                                                                                                               
-                  
-  import { useState, useRef } from 'react'
+  'use client'
+
+  import { useState, useRef, useEffect } from 'react'
 
   type FilterMode = 'not-contacted' | 'contacted'
-  type DisplayMode = 'both' | 'all' | 'emails' | 'domains' | 'linkedin'
+  type DisplayMode = 'both' | 'emails' | 'domains' | 'linkedin' | 'all'
 
   interface RawLead {
     id: number
     email: string
+    first_name?: string
+    last_name?: string
+    company?: string
+    title?: string
     updated_at?: string
     created_at?: string
     last_contacted_at?: string
     last_emailed_at?: string
     custom_variables?: Array<{ name: string; value: string }>
     lead_campaign_data?: Array<{ campaign_id: number; status: string }>
-    campaigns?: Array<{ id: number; name: string }>
-    campaign?: { id: number; name: string } | string
   }
 
   interface ProcessedLead {
     email: string
+    firstName: string
+    lastName: string
+    company: string
+    title: string
     domain: string
     lastContacted: Date | null
+    campaignIds: number[]
     campaignNames: string[]
     linkedinUrl: string
+    companyLinkedinUrl: string
+    customVars: Record<string, string>
+  }
+
+  interface Instance {
+    name: string
+    baseUrl: string
+    apiKey: string
   }
 
   interface Workspace {
+    id: number
     name: string
-    apiKey: string
   }
+
+  interface Campaign {
+    id: number
+    name: string
+    status: string
+  }
+
+  const FIXED_CUSTOM_VAR_NAMES = new Set(['person linkedin', 'company linkedin url'])
 
   function extractDomain(email: string): string {
     const at = email.indexOf('@')
@@ -45,22 +68,19 @@
     return isNaN(d.getTime()) ? null : d
   }
 
-  function extractLinkedin(lead: RawLead): string {
+  function getCustomVar(lead: RawLead, name: string): string {
     if (!Array.isArray(lead.custom_variables)) return ''
-    const found = lead.custom_variables.find(v => v.name === 'person linkedin')
-    return found?.value || ''
+    return lead.custom_variables.find(v => v.name === name)?.value || ''
   }
 
   function chunkStrings(arr: string[], size: number): string[][] {
     const result: string[][] = []
-    for (let i = 0; i < arr.length; i += size) {
-      result.push(arr.slice(i, i + size))
-    }
+    for (let i = 0; i < arr.length; i += size) result.push(arr.slice(i, i + size))
     return result
   }
 
   function formatDate(d: Date | null): string {
-    if (!d) return 'Unknown'
+    if (!d) return ''
     return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
   }
 
@@ -77,128 +97,207 @@
     }
   }
 
-  function loadSavedWorkspaces(): Workspace[] {
+  function loadSavedInstances(): Instance[] {
     if (typeof window === 'undefined') return []
     try {
-      const stored = localStorage.getItem('eb_workspaces')
+      const stored = localStorage.getItem('eb_instances')
       return stored ? JSON.parse(stored) : []
-    } catch (e) {
-      return []
-    }
+    } catch { return [] }
   }
 
-  function saveWorkspacesToStorage(workspaces: Workspace[]): void {
-    localStorage.setItem('eb_workspaces', JSON.stringify(workspaces))
+  function saveInstancesToStorage(instances: Instance[]): void {
+    localStorage.setItem('eb_instances', JSON.stringify(instances))
   }
 
   const DISPLAY_OPTIONS: Array<{ value: DisplayMode; label: string }> = [
-    { value: 'both', label: 'Emails + Domains' },
-    { value: 'all', label: 'Emails + Domains + LinkedIn' },
+    { value: 'both', label: 'Emails + Domains + Date' },
     { value: 'emails', label: 'Emails only' },
     { value: 'domains', label: 'Domains only' },
     { value: 'linkedin', label: 'LinkedIn only' },
+    { value: 'all', label: 'All Data' },
   ]
 
   export default function Dashboard() {
-    const [workspaces, setWorkspaces] = useState<Workspace[]>(loadSavedWorkspaces)
-    const [wsName, setWsName] = useState<string>('')
-    const [wsKey, setWsKey] = useState<string>('')
-    const [showKey, setShowKey] = useState<boolean>(false)
-    const [selected, setSelected] = useState<Workspace | null>(null)
+    const [instances, setInstances] = useState<Instance[]>(loadSavedInstances)
+    const [instName, setInstName] = useState('')
+    const [instBaseUrl, setInstBaseUrl] = useState('')
+    const [instApiKey, setInstApiKey] = useState('')
+    const [showInstKey, setShowInstKey] = useState(false)
+    const [selectedInstance, setSelectedInstance] = useState<Instance | null>(null)
+
+    const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+    const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | null>(null)
+    const [loadingWorkspaces, setLoadingWorkspaces] = useState(false)
+
+    const [campaigns, setCampaigns] = useState<Campaign[]>([])
+    const [selectedCampaignIds, setSelectedCampaignIds] = useState<Set<number>>(new Set())
+    const [loadingCampaigns, setLoadingCampaigns] = useState(false)
+    const [campaignDropdownOpen, setCampaignDropdownOpen] = useState(false)
+    const campaignDropdownRef = useRef<HTMLDivElement>(null)
+
     const [filterMode, setFilterMode] = useState<FilterMode>('not-contacted')
-    const [days, setDays] = useState<number>(90)
-    const [displayMode, setDisplayMode] = useState<DisplayMode>('both')
+    const [days, setDays] = useState<string>('')
     const [dateField, setDateField] = useState<'updated_at' | 'created_at'>('updated_at')
+    const [displayMode, setDisplayMode] = useState<DisplayMode>('both')
+
     const [leads, setLeads] = useState<ProcessedLead[]>([])
-    const [loading, setLoading] = useState<boolean>(false)
-    const [progressCurrent, setProgressCurrent] = useState<number>(0)
-    const [progressTotal, setProgressTotal] = useState<number>(0)
-    const [progressStatus, setProgressStatus] = useState<string>('')
-    const [errorMsg, setErrorMsg] = useState<string>('')
-    const [copiedIdx, setCopiedIdx] = useState<number>(-1)
+    const [loading, setLoading] = useState(false)
+    const [progressCurrent, setProgressCurrent] = useState(0)
+    const [progressTotal, setProgressTotal] = useState(0)
+    const [progressStatus, setProgressStatus] = useState('')
+    const [errorMsg, setErrorMsg] = useState('')
+    const [copiedIdx, setCopiedIdx] = useState(-1)
     const abortRef = useRef<AbortController | null>(null)
 
-    function addWorkspace(): void {
-      const name = wsName.trim()
-      const apiKey = wsKey.trim()
-      if (!name || !apiKey) return
-      const updated = workspaces.filter(w => w.name !== name).concat({ name, apiKey })
-      setWorkspaces(updated)
-      saveWorkspacesToStorage(updated)
-      setWsName('')
-      setWsKey('')
+    useEffect(() => {
+      function handleClickOutside(e: MouseEvent) {
+        if (campaignDropdownRef.current && !campaignDropdownRef.current.contains(e.target as Node)) {
+          setCampaignDropdownOpen(false)
+        }
+      }
+      document.addEventListener('mousedown', handleClickOutside)
+      return () => document.removeEventListener('mousedown', handleClickOutside)
+    }, [])
+
+    useEffect(() => {
+      if (!selectedInstance) {
+        setWorkspaces([])
+        setSelectedWorkspace(null)
+        return
+      }
+      setLoadingWorkspaces(true)
+      setSelectedWorkspace(null)
+      setCampaigns([])
+      setSelectedCampaignIds(new Set())
+      setLeads([])
+      setProgressStatus('')
+      fetch('/api/workspaces', {
+        headers: { 'x-api-key': selectedInstance.apiKey, 'x-base-url': selectedInstance.baseUrl },
+      })
+        .then(r => r.json())
+        .then(data => setWorkspaces(data.data || []))
+        .catch(() => setWorkspaces([]))
+        .finally(() => setLoadingWorkspaces(false))
+    }, [selectedInstance])
+
+    useEffect(() => {
+      if (!selectedInstance || !selectedWorkspace) {
+        setCampaigns([])
+        setSelectedCampaignIds(new Set())
+        return
+      }
+      setLoadingCampaigns(true)
+      setCampaigns([])
+      setSelectedCampaignIds(new Set())
+      setLeads([])
+      setProgressStatus('')
+      fetch('/api/campaigns', {
+        headers: {
+          'x-api-key': selectedInstance.apiKey,
+          'x-base-url': selectedInstance.baseUrl,
+          'x-workspace-id': String(selectedWorkspace.id),
+        },
+      })
+        .then(r => r.json())
+        .then(data => setCampaigns(data.campaigns || []))
+        .catch(() => setCampaigns([]))
+        .finally(() => setLoadingCampaigns(false))
+    }, [selectedWorkspace])
+
+    function saveInstance(): void {
+      const name = instName.trim()
+      const baseUrl = instBaseUrl.trim().replace(/\/$/, '')
+      const apiKey = instApiKey.trim()
+      if (!name || !baseUrl || !apiKey) return
+      const updated = instances.filter(i => i.name !== name).concat({ name, baseUrl, apiKey })
+      setInstances(updated)
+      saveInstancesToStorage(updated)
+      setInstName('')
+      setInstBaseUrl('')
+      setInstApiKey('')
     }
 
-    function deleteWorkspace(name: string): void {
-      const updated = workspaces.filter(w => w.name !== name)
-      setWorkspaces(updated)
-      saveWorkspacesToStorage(updated)
-      if (selected && selected.name === name) setSelected(null)
+    function deleteInstance(name: string): void {
+      const updated = instances.filter(i => i.name !== name)
+      setInstances(updated)
+      saveInstancesToStorage(updated)
+      if (selectedInstance?.name === name) setSelectedInstance(null)
+    }
+
+    function toggleCampaign(id: number): void {
+      setSelectedCampaignIds(prev => {
+        const next = new Set(prev)
+        if (next.has(id)) next.delete(id)
+        else next.add(id)
+        return next
+      })
     }
 
     function buildDisplayItems(processedLeads: ProcessedLead[], mode: DisplayMode): string[] {
-      if (mode === 'emails') {
-        return processedLeads.map(l => l.email)
-      }
+      if (mode === 'emails') return processedLeads.map(l => l.email)
+
       if (mode === 'domains') {
-        const seen: Set<string> = new Set()
+        const seen = new Set<string>()
         const out: string[] = []
         for (const l of processedLeads) {
-          if (l.domain && !seen.has(l.domain)) {
-            seen.add(l.domain)
-            out.push(l.domain)
-          }
+          if (l.domain && !seen.has(l.domain)) { seen.add(l.domain); out.push(l.domain) }
         }
         return out
       }
+
       if (mode === 'linkedin') {
-        return processedLeads.map(l => l.linkedinUrl).filter(url => url !== '')
+        return processedLeads.map(l => l.linkedinUrl).filter(u => u !== '')
       }
+
       if (mode === 'all') {
-        return processedLeads.map(l =>
-          [l.email, l.domain, l.linkedinUrl, formatDate(l.lastContacted), l.campaignNames.join(', ')].join('\t')
-        )
+        const extraNames = new Set<string>()
+        for (const l of processedLeads) {
+          for (const k of Object.keys(l.customVars)) {
+            if (!FIXED_CUSTOM_VAR_NAMES.has(k)) extraNames.add(k)
+          }
+        }
+        const extraArr = Array.from(extraNames).sort()
+        const header = [
+          'Email', 'First Name', 'Last Name', 'Company', 'Title', 'Domain',
+          'Person LinkedIn', 'Company LinkedIn', 'Date', ...extraArr,
+        ].join('\t')
+        const rows = processedLeads.map(l => [
+          l.email, l.firstName, l.lastName, l.company, l.title, l.domain,
+          l.linkedinUrl, l.companyLinkedinUrl, formatDate(l.lastContacted),
+          ...extraArr.map(n => l.customVars[n] || ''),
+        ].join('\t'))
+        return [header, ...rows]
       }
+
+      // 'both'
       return processedLeads.map(l =>
         [l.email, l.domain, formatDate(l.lastContacted), l.campaignNames.join(', ')].join('\t')
       )
     }
 
     async function doFetch(): Promise<void> {
-      if (!selected) return
+      if (!selectedInstance || !selectedWorkspace) return
       setLoading(true)
       setErrorMsg('')
       setLeads([])
       setProgressCurrent(0)
       setProgressTotal(0)
-      setProgressStatus('Fetching campaigns...')
+      setProgressStatus('Fetching leads...')
       abortRef.current = new AbortController()
       const signal = abortRef.current.signal
 
       try {
-        const campaignsRes = await fetch('/api/campaigns', {
-          headers: { 'x-api-key': selected.apiKey },
-          signal,
-        })
-        const campaignsData = campaignsRes.ok ? await campaignsRes.json() : {}
-        const campaignMap: Record<number, string> = {}
-        const campaignList = campaignsData.data || campaignsData.campaigns || []
-        for (const c of campaignList) {
-          if (c.id && c.name) campaignMap[c.id] = c.name
-        }
-
-        setProgressStatus('Fetching leads...')
         const leadsRes = await fetch('/api/leads', {
-          headers: { 'x-api-key': selected.apiKey },
+          headers: {
+            'x-api-key': selectedInstance.apiKey,
+            'x-base-url': selectedInstance.baseUrl,
+            'x-workspace-id': String(selectedWorkspace.id),
+          },
           signal,
         })
 
-        if (!leadsRes.ok) {
-          throw new Error('EmailBison returned status ' + leadsRes.status)
-        }
-        if (!leadsRes.body) {
-          throw new Error('No response body from leads API')
-        }
+        if (!leadsRes.ok) throw new Error('API returned ' + leadsRes.status)
+        if (!leadsRes.body) throw new Error('No response body')
 
         const reader = leadsRes.body.getReader()
         const dec = new TextDecoder()
@@ -206,69 +305,78 @@
         const allLeads: RawLead[] = []
 
         while (true) {
-          const readResult = await reader.read()
-          if (readResult.done) break
-          buf += dec.decode(readResult.value, { stream: true })
+          const { done, value } = await reader.read()
+          if (done) break
+          buf += dec.decode(value, { stream: true })
           const lines = buf.split('\n')
           buf = lines.pop() || ''
-          for (let li = 0; li < lines.length; li++) {
-            const line = lines[li]
-            if (!line || !line.trim()) continue
+          for (const line of lines) {
+            if (!line.trim()) continue
             try {
               const parsed = JSON.parse(line)
               if (parsed.error) throw new Error(parsed.error)
-              const newLeads: RawLead[] = parsed.leads || []
-              for (const l of newLeads) allLeads.push(l)
+              for (const l of (parsed.leads || [])) allLeads.push(l)
               setProgressCurrent(parsed.page || 0)
               setProgressTotal(parsed.lastPage || parsed.page || 0)
-              setProgressStatus('Page ' + parsed.page + ' of ' + (parsed.lastPage || '?'))
-            } catch (lineErr) {
-              // skip bad line
-            }
+              setProgressStatus(`Page ${parsed.page} of ${parsed.lastPage || '?'}`)
+            } catch { /* skip bad lines */ }
           }
         }
 
-        const cutoff = new Date()
-        cutoff.setDate(cutoff.getDate() - days)
-        const emailSeen: Set<string> = new Set()
+        const campaignMap: Record<number, string> = {}
+        for (const c of campaigns) campaignMap[c.id] = c.name
+
+        const daysNum = days.trim() === '' ? null : parseInt(days)
+        const cutoff = daysNum !== null ? new Date() : null
+        if (cutoff && daysNum !== null) cutoff.setDate(cutoff.getDate() - daysNum)
+
+        const emailSeen = new Set<string>()
         const processed: ProcessedLead[] = []
 
-        for (let i = 0; i < allLeads.length; i++) {
-          const lead = allLeads[i]
+        for (const lead of allLeads) {
           if (!lead.email) continue
           const email = lead.email.toLowerCase().trim()
           if (emailSeen.has(email)) continue
 
+          const leadCampaignIds = (lead.lead_campaign_data || []).map(d => d.campaign_id)
+
+          // Campaign filter
+          if (selectedCampaignIds.size > 0 && !leadCampaignIds.some(id => selectedCampaignIds.has(id))) continue
+
+          // Date filter (only if days is set)
+          if (cutoff) {
+            const lastContacted = getLeadDate(lead, dateField)
+            let include: boolean
+            if (filterMode === 'not-contacted') {
+              include = !lastContacted || lastContacted < cutoff
+            } else {
+              include = lastContacted !== null && lastContacted >= cutoff
+            }
+            if (!include) continue
+          }
+
           const lastContacted = getLeadDate(lead, dateField)
-          let include: boolean
-          if (filterMode === 'not-contacted') {
-            include = !lastContacted || lastContacted < cutoff
-          } else {
-            include = lastContacted !== null && lastContacted >= cutoff
-          }
-          if (!include) continue
-
           const domain = extractDomain(email)
-          const linkedinUrl = extractLinkedin(lead)
-
-          // Get campaign names from lead_campaign_data using the campaign map
-          const campaignNames: string[] = []
-          if (Array.isArray(lead.lead_campaign_data)) {
-            for (const lcd of lead.lead_campaign_data) {
-              const name = campaignMap[lcd.campaign_id]
-              if (name) campaignNames.push(name)
-            }
-          } else if (Array.isArray(lead.campaigns)) {
-            for (const c of lead.campaigns) {
-              if (c && c.name) campaignNames.push(c.name)
-            }
-          } else if (lead.campaign) {
-            const cn = typeof lead.campaign === 'object' ? lead.campaign.name : String(lead.campaign)
-            if (cn) campaignNames.push(cn)
-          }
+          const linkedinUrl = getCustomVar(lead, 'person linkedin')
+          const companyLinkedinUrl = getCustomVar(lead, 'company linkedin url')
+          const customVars: Record<string, string> = {}
+          for (const cv of (lead.custom_variables || [])) customVars[cv.name] = cv.value
 
           emailSeen.add(email)
-          processed.push({ email, domain, lastContacted, campaignNames, linkedinUrl })
+          processed.push({
+            email,
+            firstName: lead.first_name || '',
+            lastName: lead.last_name || '',
+            company: lead.company || '',
+            title: lead.title || '',
+            domain,
+            lastContacted,
+            campaignIds: leadCampaignIds,
+            campaignNames: leadCampaignIds.map(id => campaignMap[id]).filter(Boolean),
+            linkedinUrl,
+            companyLinkedinUrl,
+            customVars,
+          })
         }
 
         processed.sort((a, b) => {
@@ -279,19 +387,17 @@
         })
 
         setLeads(processed)
-        setProgressStatus('Done — ' + processed.length.toLocaleString() + ' leads loaded')
-      } catch (fetchErr) {
-        const errMsg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr)
-        if (errMsg.indexOf('AbortError') < 0) {
-          setErrorMsg(errMsg || 'Something went wrong')
-        }
+        setProgressStatus(`Done — ${processed.length.toLocaleString()} leads loaded`)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (!msg.includes('AbortError')) setErrorMsg(msg)
       }
 
       setLoading(false)
     }
 
     function stopFetching(): void {
-      if (abortRef.current) abortRef.current.abort()
+      abortRef.current?.abort()
       setLoading(false)
     }
 
@@ -301,80 +407,80 @@
       setTimeout(() => setCopiedIdx(-1), 1500)
     }
 
-    const displayItems: string[] = leads.length > 0 ? buildDisplayItems(leads, displayMode) : []
-    const chunks: string[][] = chunkStrings(displayItems, 10000)
-
-    const domainSet: Set<string> = new Set()
-    for (const l of leads) {
-      if (l.domain) domainSet.add(l.domain)
-    }
-    const uniqueDomainsCount = domainSet.size
+    const displayItems = leads.length > 0 ? buildDisplayItems(leads, displayMode) : []
+    const chunks = chunkStrings(displayItems, 10000)
+    const uniqueDomainsCount = new Set(leads.map(l => l.domain).filter(Boolean)).size
     const progressPct = progressTotal > 0 ? Math.min(100, (progressCurrent / progressTotal) * 100) : 0
 
     return (
       <div className="max-w-7xl mx-auto p-6 space-y-5">
 
+        {/* Header */}
         <div className="bg-white rounded-xl border border-gray-200 p-6">
           <h1 className="text-2xl font-bold text-gray-900">EmailBison Dashboard</h1>
           <p className="text-sm text-gray-500 mt-1">Filter leads, extract domains, export in bulk — read-only</p>
         </div>
 
+        {/* Instances */}
         <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
-          <h2 className="text-base font-semibold text-gray-800">Workspaces</h2>
+          <h2 className="text-base font-semibold text-gray-800">Instances</h2>
           <div className="flex gap-3 flex-wrap items-center">
             <input
               type="text"
-              placeholder="Workspace / client name"
-              value={wsName}
-              onChange={e => setWsName(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm flex-1 min-w-44 focus:ring-2 focus:ring-blue-500 outline-none"
+              placeholder="Name (e.g. personal)"
+              value={instName}
+              onChange={e => setInstName(e.target.value)}
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm flex-1 min-w-36 focus:ring-2 focus:ring-blue-500 outline-none"
             />
-            <div className="relative flex-1 min-w-64">
+            <input
+              type="text"
+              placeholder="Base URL (e.g. https://personal.buzzlead.io)"
+              value={instBaseUrl}
+              onChange={e => setInstBaseUrl(e.target.value)}
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm flex-1 min-w-64 focus:ring-2 focus:ring-blue-500 outline-none"
+            />
+            <div className="relative flex-1 min-w-52">
               <input
-                type={showKey ? 'text' : 'password'}
-                placeholder="EmailBison API Key"
-                value={wsKey}
-                onChange={e => setWsKey(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') addWorkspace() }}
+                type={showInstKey ? 'text' : 'password'}
+                placeholder="Super API Key"
+                value={instApiKey}
+                onChange={e => setInstApiKey(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') saveInstance() }}
                 className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-full pr-14 focus:ring-2 focus:ring-blue-500 outline-none"
               />
               <button
-                onClick={() => setShowKey(!showKey)}
+                onClick={() => setShowInstKey(!showInstKey)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-600"
               >
-                {showKey ? 'Hide' : 'Show'}
+                {showInstKey ? 'Hide' : 'Show'}
               </button>
             </div>
             <button
-              onClick={addWorkspace}
+              onClick={saveInstance}
               className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
             >
               Save
             </button>
           </div>
 
-          {workspaces.length > 0 && (
+          {instances.length > 0 && (
             <div className="flex gap-2 flex-wrap">
-              {workspaces.map(ws => (
-                <div key={ws.name} className="flex items-center gap-0.5">
+              {instances.map(inst => (
+                <div key={inst.name} className="flex items-center gap-0.5">
                   <button
-                    onClick={() => setSelected(ws)}
+                    onClick={() => setSelectedInstance(inst)}
                     className={
                       'px-3 py-1.5 rounded-l-lg text-sm font-medium transition-colors ' +
-                      (selected && selected.name === ws.name
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200')
+                      (selectedInstance?.name === inst.name ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200')
                     }
                   >
-                    {ws.name}
+                    {inst.name}
                   </button>
                   <button
-                    onClick={() => deleteWorkspace(ws.name)}
+                    onClick={() => deleteInstance(inst.name)}
                     className={
                       'px-2 py-1.5 rounded-r-lg text-sm transition-colors ' +
-                      (selected && selected.name === ws.name
-                        ? 'bg-blue-500 text-white hover:bg-red-500'
-                        : 'bg-gray-100 text-gray-400 hover:bg-red-100 hover:text-red-500')
+                      (selectedInstance?.name === inst.name ? 'bg-blue-500 text-white hover:bg-red-500' : 'bg-gray-100 text-gray-400 hover:bg-red-100 hover:text-red-500')
                     }
                   >
                     x
@@ -385,13 +491,89 @@
           )}
         </div>
 
-        {selected && (
+        {/* Workspace + Campaign */}
+        {selectedInstance && (
           <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
             <h2 className="text-base font-semibold text-gray-800">
-              {'Filters — '}
-              <span className="text-blue-600">{selected.name}</span>
+              Select Workspace — <span className="text-blue-600">{selectedInstance.name}</span>
             </h2>
+            <div className="flex gap-4 flex-wrap items-end">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">Client Workspace</label>
+                {loadingWorkspaces ? (
+                  <div className="text-sm text-gray-400 py-2">Loading workspaces...</div>
+                ) : (
+                  <select
+                    value={selectedWorkspace?.id || ''}
+                    onChange={e => setSelectedWorkspace(workspaces.find(w => w.id === Number(e.target.value)) || null)}
+                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white min-w-52"
+                  >
+                    <option value="">Select workspace...</option>
+                    {workspaces.map(ws => (
+                      <option key={ws.id} value={ws.id}>{ws.name}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
 
+              {selectedWorkspace && (
+                <div className="space-y-1.5" ref={campaignDropdownRef}>
+                  <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">Campaigns</label>
+                  {loadingCampaigns ? (
+                    <div className="text-sm text-gray-400 py-2">Loading campaigns...</div>
+                  ) : (
+                    <div className="relative">
+                      <button
+                        onClick={() => setCampaignDropdownOpen(!campaignDropdownOpen)}
+                        className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white text-gray-700 min-w-52 text-left flex items-center justify-between gap-2 focus:ring-2 focus:ring-blue-500
+  outline-none"
+                      >
+                        <span>
+                          {selectedCampaignIds.size === 0 ? 'All Campaigns' : `${selectedCampaignIds.size} campaign${selectedCampaignIds.size > 1 ? 's' : ''} selected`}
+                        </span>
+                        <span className="text-gray-400 text-xs">▾</span>
+                      </button>
+                      {campaignDropdownOpen && (
+                        <div className="absolute top-full mt-1 left-0 bg-white border border-gray-200 rounded-lg shadow-lg z-20 min-w-72 max-h-72 overflow-y-auto">
+                          <div
+                            onClick={() => { setSelectedCampaignIds(new Set()); setCampaignDropdownOpen(false) }}
+                            className="px-3 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer border-b border-gray-100"
+                          >
+                            All Campaigns
+                          </div>
+                          {campaigns.map(c => (
+                            <label key={c.id} className="flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={selectedCampaignIds.has(c.id)}
+                                onChange={() => toggleCampaign(c.id)}
+                                className="rounded"
+                              />
+                              <span className="flex-1 leading-snug">{c.name}</span>
+                              <span className={
+                                'text-xs px-1.5 py-0.5 rounded shrink-0 ' +
+                                (c.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500')
+                              }>
+                                {c.status}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Filters */}
+        {selectedInstance && selectedWorkspace && (
+          <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+            <h2 className="text-base font-semibold text-gray-800">
+              Filters — <span className="text-blue-600">{selectedWorkspace.name}</span>
+            </h2>
             <div className="flex gap-4 flex-wrap items-end">
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">Mode</label>
@@ -418,13 +600,14 @@
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">Days</label>
+                <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">Days (empty = all)</label>
                 <input
                   type="number"
                   min={1}
                   value={days}
-                  onChange={e => setDays(Math.max(1, parseInt(e.target.value) || 1))}
-                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-24 focus:ring-2 focus:ring-blue-500 outline-none"
+                  placeholder="All"
+                  onChange={e => setDays(e.target.value)}
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-28 focus:ring-2 focus:ring-blue-500 outline-none"
                 />
               </div>
 
@@ -480,25 +663,19 @@
                   {loading ? 'Fetching...' : 'Fetch Leads'}
                 </button>
                 {loading && (
-                  <button
-                    onClick={stopFetching}
-                    className="bg-red-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-600 transition-colors"
-                  >
+                  <button onClick={stopFetching} className="bg-red-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-600 transition-colors">
                     Stop
                   </button>
                 )}
               </div>
             </div>
 
-            {progressStatus !== '' && (
+            {progressStatus && (
               <div className="space-y-1.5">
                 <div className="text-sm text-gray-500">{progressStatus}</div>
                 {progressTotal > 0 && (
                   <div className="w-full bg-gray-100 rounded-full h-1.5">
-                    <div
-                      className="bg-blue-600 h-1.5 rounded-full transition-all"
-                      style={{ width: progressPct + '%' }}
-                    />
+                    <div className="bg-blue-600 h-1.5 rounded-full transition-all" style={{ width: progressPct + '%' }} />
                   </div>
                 )}
               </div>
@@ -506,7 +683,7 @@
           </div>
         )}
 
-        {errorMsg !== '' && (
+        {errorMsg && (
           <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">{errorMsg}</div>
         )}
 
@@ -525,10 +702,8 @@
               <div className="text-xs text-gray-500 mt-0.5">Columns (10k ea.)</div>
             </div>
             <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <div className="text-xl font-bold text-gray-900">{days}</div>
-              <div className="text-xs text-gray-500 mt-0.5">
-                {filterMode === 'not-contacted' ? 'Days since last contact' : 'Days lookback'}
-              </div>
+              <div className="text-xl font-bold text-gray-900">{days || 'All'}</div>
+              <div className="text-xs text-gray-500 mt-0.5">Days filter</div>
             </div>
           </div>
         )}
@@ -542,24 +717,14 @@
                 {' '}
                 {displayMode === 'domains' ? 'domains' : displayMode === 'emails' ? 'emails' : displayMode === 'linkedin' ? 'LinkedIn URLs' : 'entries'}
               </h2>
-              {displayMode === 'both' && (
-                <span className="text-xs text-gray-400">email · domain · last contacted · campaign</span>
-              )}
-              {displayMode === 'all' && (
-                <span className="text-xs text-gray-400">email · domain · linkedin · last contacted · campaign</span>
-              )}
+              {displayMode === 'both' && <span className="text-xs text-gray-400">email · domain · date · campaign</span>}
+              {displayMode === 'all' && <span className="text-xs text-gray-400">all fields — first row is header</span>}
             </div>
 
-            <div
-              className={
-                'grid gap-4 ' +
-                (chunks.length === 1
-                  ? 'grid-cols-1'
-                  : chunks.length === 2
-                  ? 'grid-cols-1 md:grid-cols-2'
-                  : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3')
-              }
-            >
+            <div className={
+              'grid gap-4 ' +
+              (chunks.length === 1 ? 'grid-cols-1' : chunks.length === 2 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3')
+            }>
               {chunks.map((ch, i) => (
                 <div key={i} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                   <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50">
@@ -590,18 +755,17 @@
           </div>
         )}
 
-        {!loading && leads.length === 0 && selected !== null && errorMsg === '' && progressStatus === '' && (
+        {!loading && leads.length === 0 && selectedWorkspace && !errorMsg && !progressStatus && (
           <div className="bg-white rounded-xl border border-gray-200 p-12 text-center text-gray-400 text-sm">
             Select filters above and click Fetch Leads to get started.
           </div>
         )}
 
-        {selected === null && (
+        {!selectedInstance && (
           <div className="bg-white rounded-xl border border-gray-200 p-12 text-center text-gray-400 text-sm">
-            Add a workspace above to get started.
+            Add an instance above to get started.
           </div>
         )}
-
       </div>
     )
   }
