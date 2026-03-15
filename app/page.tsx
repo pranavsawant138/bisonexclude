@@ -1,6 +1,6 @@
- 'use client'                                                                                                                                                                                                                                                               
-                                                                                                                                                                                                                                                                             
-  import { useState, useRef } from 'react'                                                                                                                                                                                                                                   
+ 'use client'                                                                                                                                                                                                    
+                  
+  import { useState, useRef } from 'react'                                                                                                                                                                        
                   
   type FilterMode = 'not-contacted' | 'contacted'
   type DisplayMode = 'both' | 'emails' | 'domains'
@@ -9,6 +9,7 @@
     id: number
     email: string
     updated_at?: string
+    created_at?: string
     last_contacted_at?: string
     last_emailed_at?: string
     campaigns?: Array<{ id: number; name: string }>
@@ -32,8 +33,10 @@
     return at >= 0 ? email.slice(at + 1).toLowerCase().trim() : ''
   }
 
-  function getLastContacted(lead: RawLead): Date | null {
-    const raw = lead.last_contacted_at || lead.last_emailed_at || lead.updated_at
+  function getLeadDate(lead: RawLead, field: 'updated_at' | 'created_at'): Date | null {
+    const raw = field === 'created_at'
+      ? lead.created_at
+      : (lead.last_contacted_at || lead.last_emailed_at || lead.updated_at)
     if (!raw) return null
     const d = new Date(raw)
     return isNaN(d.getTime()) ? null : d
@@ -211,7 +214,7 @@
           const email = lead.email.toLowerCase().trim()
           if (emailSeen.has(email)) continue
 
-          const lastContacted = getLastContacted(lead)
+          const lastContacted = getLeadDate(lead, dateField)
           let include: boolean
           if (filterMode === 'not-contacted') {
             include = !lastContacted || lastContacted < cutoff
@@ -397,6 +400,30 @@
                   onChange={e => setDays(Math.max(1, parseInt(e.target.value) || 1))}
                   className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-24 focus:ring-2 focus:ring-blue-500 outline-none"
                 />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">Date Field</label>
+                <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm">
+                  <button
+                    onClick={() => setDateField('updated_at')}
+                    className={
+                      'px-3 py-2 font-medium transition-colors border-r border-gray-300 ' +
+                      (dateField === 'updated_at' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50')
+                    }
+                  >
+                    Updated At
+                  </button>
+                  <button
+                    onClick={() => setDateField('created_at')}
+                    className={
+                      'px-3 py-2 font-medium transition-colors ' +
+                      (dateField === 'created_at' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50')
+                    }
+                  >
+                    Created At
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-1.5">
