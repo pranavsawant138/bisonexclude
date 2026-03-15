@@ -1,6 +1,6 @@
  import { NextRequest } from 'next/server'                                                                                                                                                                       
                   
-  export async function GET(req: NextRequest) {                                                                                                                                                                   
+  export async function GET(req: NextRequest) {
     const apiKey = req.headers.get('x-api-key')
     const baseUrl = req.headers.get('x-base-url') || 'https://personal.buzzlead.io'
     const workspaceId = req.headers.get('x-workspace-id')
@@ -20,11 +20,7 @@
         if (!res.ok) break
         const data = await res.json()
         const campaigns = data.data || []
-        for (const c of campaigns) {
-          if (!workspaceId || (c as any).team_id == Number(workspaceId)) {
-            allCampaigns.push(c)
-          }
-        }
+        for (const c of campaigns) allCampaigns.push(c)
         if (!data.links?.next || campaigns.length === 0) break
         page++
       }
