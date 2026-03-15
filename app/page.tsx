@@ -1,7 +1,7 @@
- 'use client'
-
-  import { useState, useRef, useEffect } from 'react'
-
+ 'use client'                                                                                                                                                                                                    
+                  
+  import { useState, useRef, useEffect } from 'react'                                                                                                                                                             
+                  
   type FilterMode = 'not-contacted' | 'contacted'
   type DisplayMode = 'both' | 'emails' | 'domains' | 'linkedin' | 'all'
 
@@ -37,6 +37,7 @@
     employeeCount: string
     customVars: Record<string, string>
     tagIds: number[]
+    tagNames: string[]
   }
 
   interface Instance {
@@ -300,7 +301,7 @@
         const header = [
           'Email', 'First Name', 'Last Name', 'Company', 'Title', 'Domain',
           'Website', 'Employee Count', 'Person LinkedIn', 'Company LinkedIn',
-          'Date', 'Campaign',
+          'Date', 'Campaign', 'Tags',
         ].join('\t')
 
         const rows = processedLeads.map(l => [
@@ -316,6 +317,7 @@
           sanitize(l.companyLinkedinUrl),
           formatDate(l.lastContacted),
           sanitize(l.campaignNames.join(', ')),
+          sanitize(l.tagNames.join(', ')),
         ].join('\t'))
 
         return [header, ...rows]
@@ -380,6 +382,9 @@
         const campaignMap: Record<number, string> = {}
         for (const c of campaigns) campaignMap[c.id] = c.name
 
+        const tagMap: Record<number, string> = {}
+        for (const t of tags) tagMap[t.id] = t.name
+
         const daysNum = days.trim() === '' ? null : parseInt(days)
         const cutoff = daysNum !== null ? new Date() : null
         if (cutoff && daysNum !== null) cutoff.setDate(cutoff.getDate() - daysNum)
@@ -431,6 +436,7 @@
             employeeCount: customVars['employee count'] || '',
             customVars,
             tagIds: leadTagIds,
+            tagNames: leadTagIds.map(id => tagMap[id] || '').filter(Boolean),
           })
         }
 
@@ -643,7 +649,6 @@
                       </button>
                       {tagDropdownOpen && (
                         <div className="absolute top-full mt-1 left-0 bg-white border border-gray-200 rounded-lg shadow-lg z-20 w-72">
-                          {/* Search */}
                           <div className="p-2 border-b border-gray-100">
                             <input
                               type="text"
@@ -654,8 +659,7 @@
                               autoFocus
                             />
                           </div>
-                          {/* Select All / Clear */}
-                          <div className="flex gap-0 border-b border-gray-100">
+                          <div className="flex border-b border-gray-100">
                             <button
                               onClick={selectAllTags}
                               className="flex-1 px-3 py-2 text-xs font-medium text-blue-600 hover:bg-blue-50 transition-colors"
@@ -670,7 +674,6 @@
                               Clear
                             </button>
                           </div>
-                          {/* Tag list */}
                           <div className="max-h-56 overflow-y-auto">
                             {tags.length === 0 ? (
                               <div className="px-3 py-4 text-sm text-gray-400 text-center">No tags found</div>
@@ -851,7 +854,7 @@
               </h2>
               {displayMode === 'both' && <span className="text-xs text-gray-400">email · domain · date · campaign</span>}
               {displayMode === 'all' && <span className="text-xs text-gray-400">Email · First Name · Last Name · Company · Title · Domain · Website · Employee Count · Person LinkedIn · Company LinkedIn · Date ·
-   Campaign</span>}
+   Campaign · Tags</span>}
             </div>
 
             <div className={
