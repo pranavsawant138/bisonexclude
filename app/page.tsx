@@ -1,5 +1,5 @@
- 'use client'                                                                                                                                                                                                                                                               
-                                                                                                                                                                                                                                                                             
+  'use client'                                                                                                                                                                                                                                                               
+                  
   import { useState, useRef } from 'react'                                                                                                                                                                                                                                   
                   
   type FilterMode = 'not-contacted' | 'contacted'
@@ -12,7 +12,8 @@
     created_at?: string
     last_contacted_at?: string
     last_emailed_at?: string
-    person_linkedin?: string
+    custom_variables?: Record<string, string>
+    variables?: Record<string, string>
     campaigns?: Array<{ id: number; name: string }>
     campaign?: { id: number; name: string } | string
   }
@@ -42,6 +43,16 @@
     if (!raw) return null
     const d = new Date(raw)
     return isNaN(d.getTime()) ? null : d
+  }
+
+  function extractLinkedin(lead: RawLead): string {
+    return (
+      lead.custom_variables?.['person linkedin'] ||
+      lead.variables?.['person linkedin'] ||
+      lead.custom_variables?.['person_linkedin'] ||
+      lead.variables?.['person_linkedin'] ||
+      ''
+    )
   }
 
   function chunkStrings(arr: string[], size: number): string[][] {
@@ -145,16 +156,13 @@
         return out
       }
       if (mode === 'linkedin') {
-        return processedLeads
-          .map(l => l.linkedinUrl)
-          .filter(url => url !== '')
+        return processedLeads.map(l => l.linkedinUrl).filter(url => url !== '')
       }
       if (mode === 'all') {
         return processedLeads.map(l =>
           [l.email, l.domain, l.linkedinUrl, formatDate(l.lastContacted), l.campaignNames.join(', ')].join('\t')
         )
       }
-      // 'both'
       return processedLeads.map(l =>
         [l.email, l.domain, formatDate(l.lastContacted), l.campaignNames.join(', ')].join('\t')
       )
@@ -239,7 +247,7 @@
           if (!include) continue
 
           const domain = extractDomain(email)
-          const linkedinUrl = lead.person_linkedin || ''
+          const linkedinUrl = extractLinkedin(lead)
           const campaignNames: string[] = []
 
           if (Array.isArray(lead.campaigns)) {
