@@ -3,7 +3,6 @@
   export async function GET(req: NextRequest) {
     const apiKey = req.headers.get('x-api-key')
     const baseUrl = req.headers.get('x-base-url') || 'https://personal.buzzlead.io'
-    const workspaceId = req.headers.get('x-workspace-id')
 
     if (!apiKey) return Response.json({ error: 'No API key' }, { status: 401 })
 
@@ -13,7 +12,6 @@
       while (true) {
         const url = new URL(`${baseUrl}/api/campaigns`)
         url.searchParams.set('page', String(page))
-        if (workspaceId) url.searchParams.set('team_id', workspaceId)
         const res = await fetch(url.toString(), {
           headers: { Authorization: `Bearer ${apiKey}` },
         })
