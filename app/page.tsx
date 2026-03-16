@@ -46,6 +46,11 @@
     apiKey: string
   }
 
+  interface Workspace {
+    id: number
+    name: string
+  }
+
   interface Campaign {
     id: number
     name: string
@@ -127,6 +132,10 @@
     const [showInstKey, setShowInstKey] = useState(false)
     const [selectedInstance, setSelectedInstance] = useState<Instance | null>(null)
 
+    const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+    const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | null>(null)
+    const [loadingWorkspaces, setLoadingWorkspaces] = useState(false)
+
     const [campaigns, setCampaigns] = useState<Campaign[]>([])
     const [selectedCampaignIds, setSelectedCampaignIds] = useState<Set<number>>(new Set())
     const [loadingCampaigns, setLoadingCampaigns] = useState(false)
@@ -169,18 +178,40 @@
 
     useEffect(() => {
       if (!selectedInstance) {
+        setWorkspaces([])
+        setSelectedWorkspace(null)
+        return
+      }
+      setLoadingWorkspaces(true)
+      setSelectedWorkspace(null)
+      setCampaigns([])
+      setSelectedCampaignIds(new Set())
+      setTags([])
+      setSelectedTagIds(new Set())
+      setLeads([])
+      setProgressStatus('')
+      fetch('/api/workspaces', {
+        headers: { 'x-api-key': selectedInstance.apiKey, 'x-base-url': selectedInstance.baseUrl },
+      })
+        .then(r => r.json())
+        .then(data => setWorkspaces(data.data || []))
+        .catch(() => setWorkspaces([]))
+        .finally(() => setLoadingWorkspaces(false))
+    }, [selectedInstance])
+
+    useEffect(() => {
+      if (!selectedInstance || !selectedWorkspace) {
         setCampaigns([])
         setSelectedCampaignIds(new Set())
         setTags([])
         setSelectedTagIds(new Set())
-        setLeads([])
-        setProgressStatus('')
         return
       }
 
       const headers = {
         'x-api-key': selectedInstance.apiKey,
         'x-base-url': selectedInstance.baseUrl,
+        'x-workspace-id': String(selectedWorkspace.id),
       }
 
       setLoadingCampaigns(true)
@@ -202,7 +233,7 @@
         .then(data => setTags(data.tags || []))
         .catch(() => setTags([]))
         .finally(() => setLoadingTags(false))
-    }, [selectedInstance])
+    }, [selectedWorkspace, selectedInstance])
 
     function saveInstance(): void {
       const name = instName.trim()
@@ -298,7 +329,7 @@
     }
 
     async function doFetch(): Promise<void> {
-      if (!selectedInstance) return
+      if (!selectedInstance || !selectedWorkspace) return
       setLoading(true)
       setErrorMsg('')
       setLeads([])
@@ -313,6 +344,7 @@
           headers: {
             'x-api-key': selectedInstance.apiKey,
             'x-base-url': selectedInstance.baseUrl,
+            'x-workspace-id': String(selectedWorkspace.id),
           },
           signal,
         })
@@ -522,134 +554,161 @@
         {selectedInstance && (
           <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
             <h2 className="text-base font-semibold text-gray-800">
-              Filters — <span className="text-blue-600">{selectedInstance.name}</span>
+              Select Workspace — <span className="text-blue-600">{selectedInstance.name}</span>
             </h2>
             <div className="flex gap-4 flex-wrap items-end">
 
-              {/* Campaigns */}
-              <div className="space-y-1.5" ref={campaignDropdownRef}>
-                <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">Campaigns</label>
-                {loadingCampaigns ? (
-                  <div className="text-sm text-gray-400 py-2">Loading...</div>
+              {/* Workspace */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">Client Workspace</label>
+                {loadingWorkspaces ? (
+                  <div className="text-sm text-gray-400 py-2">Loading workspaces...</div>
                 ) : (
-                  <div className="relative">
-                    <button
-                      onClick={() => { setCampaignDropdownOpen(!campaignDropdownOpen); setTagDropdownOpen(false) }}
-                      className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white text-gray-700 min-w-48 text-left flex items-center justify-between gap-2 focus:ring-2 focus:ring-blue-500 outline-none"
-                    >
-                      <span>
-                        {selectedCampaignIds.size === 0 ? 'All Campaigns' : `${selectedCampaignIds.size} campaign${selectedCampaignIds.size > 1 ? 's' : ''} selected`}
-                      </span>
-                      <span className="text-gray-400 text-xs">▾</span>
-                    </button>
-                    {campaignDropdownOpen && (
-                      <div className="absolute top-full mt-1 left-0 bg-white border border-gray-200 rounded-lg shadow-lg z-20 min-w-72 max-h-72 overflow-y-auto">
-                        <div
-                          onClick={() => { setSelectedCampaignIds(new Set()); setCampaignDropdownOpen(false) }}
-                          className="px-3 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer border-b border-gray-100"
-                        >
-                          All Campaigns
-                        </div>
-                        {campaigns.map(c => (
-                          <label key={c.id} className="flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={selectedCampaignIds.has(c.id)}
-                              onChange={() => toggleCampaign(c.id)}
-                              className="rounded"
-                            />
-                            <span className="flex-1 leading-snug">{c.name}</span>
-                            <span className={
-                              'text-xs px-1.5 py-0.5 rounded shrink-0 ' +
-                              (c.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500')
-                            }>
-                              {c.status}
-                            </span>
-                          </label>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                  <select
+                    value={selectedWorkspace?.id || ''}
+                    onChange={e => setSelectedWorkspace(workspaces.find(w => w.id === Number(e.target.value)) || null)}
+                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white min-w-52"
+                  >
+                    <option value="">Select workspace...</option>
+                    {workspaces.map(ws => (
+                      <option key={ws.id} value={ws.id}>{ws.name}</option>
+                    ))}
+                  </select>
                 )}
               </div>
 
+              {/* Campaigns */}
+              {selectedWorkspace && (
+                <div className="space-y-1.5" ref={campaignDropdownRef}>
+                  <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">Campaigns</label>
+                  {loadingCampaigns ? (
+                    <div className="text-sm text-gray-400 py-2">Loading...</div>
+                  ) : (
+                    <div className="relative">
+                      <button
+                        onClick={() => { setCampaignDropdownOpen(!campaignDropdownOpen); setTagDropdownOpen(false) }}
+                        className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white text-gray-700 min-w-48 text-left flex items-center justify-between gap-2 focus:ring-2 focus:ring-blue-500
+  outline-none"
+                      >
+                        <span>
+                          {selectedCampaignIds.size === 0 ? 'All Campaigns' : `${selectedCampaignIds.size} campaign${selectedCampaignIds.size > 1 ? 's' : ''} selected`}
+                        </span>
+                        <span className="text-gray-400 text-xs">▾</span>
+                      </button>
+                      {campaignDropdownOpen && (
+                        <div className="absolute top-full mt-1 left-0 bg-white border border-gray-200 rounded-lg shadow-lg z-20 min-w-72 max-h-72 overflow-y-auto">
+                          <div
+                            onClick={() => { setSelectedCampaignIds(new Set()); setCampaignDropdownOpen(false) }}
+                            className="px-3 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer border-b border-gray-100"
+                          >
+                            All Campaigns
+                          </div>
+                          {campaigns.map(c => (
+                            <label key={c.id} className="flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={selectedCampaignIds.has(c.id)}
+                                onChange={() => toggleCampaign(c.id)}
+                                className="rounded"
+                              />
+                              <span className="flex-1 leading-snug">{c.name}</span>
+                              <span className={
+                                'text-xs px-1.5 py-0.5 rounded shrink-0 ' +
+                                (c.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500')
+                              }>
+                                {c.status}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Tags */}
-              <div className="space-y-1.5" ref={tagDropdownRef}>
-                <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">Tags</label>
-                {loadingTags ? (
-                  <div className="text-sm text-gray-400 py-2">Loading...</div>
-                ) : (
-                  <div className="relative">
-                    <button
-                      onClick={() => { setTagDropdownOpen(!tagDropdownOpen); setCampaignDropdownOpen(false) }}
-                      className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white text-gray-700 min-w-48 text-left flex items-center justify-between gap-2 focus:ring-2 focus:ring-blue-500 outline-none"
-                    >
-                      <span>
-                        {selectedTagIds.size === 0
-                          ? 'All Tags'
-                          : `${selectedTagIds.size} tag${selectedTagIds.size > 1 ? 's' : ''} selected`}
-                      </span>
-                      <span className="text-gray-400 text-xs">▾</span>
-                    </button>
-                    {tagDropdownOpen && (
-                      <div className="absolute top-full mt-1 left-0 bg-white border border-gray-200 rounded-lg shadow-lg z-20 w-72">
-                        <div className="p-2 border-b border-gray-100">
-                          <input
-                            type="text"
-                            placeholder="Search tags..."
-                            value={tagSearch}
-                            onChange={e => setTagSearch(e.target.value)}
-                            className="w-full border border-gray-200 rounded-md px-2.5 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                            autoFocus
-                          />
+              {selectedWorkspace && (
+                <div className="space-y-1.5" ref={tagDropdownRef}>
+                  <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">Tags</label>
+                  {loadingTags ? (
+                    <div className="text-sm text-gray-400 py-2">Loading...</div>
+                  ) : (
+                    <div className="relative">
+                      <button
+                        onClick={() => { setTagDropdownOpen(!tagDropdownOpen); setCampaignDropdownOpen(false) }}
+                        className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white text-gray-700 min-w-48 text-left flex items-center justify-between gap-2 focus:ring-2 focus:ring-blue-500
+  outline-none"
+                      >
+                        <span>
+                          {selectedTagIds.size === 0
+                            ? 'All Tags'
+                            : `${selectedTagIds.size} tag${selectedTagIds.size > 1 ? 's' : ''} selected`}
+                        </span>
+                        <span className="text-gray-400 text-xs">▾</span>
+                      </button>
+                      {tagDropdownOpen && (
+                        <div className="absolute top-full mt-1 left-0 bg-white border border-gray-200 rounded-lg shadow-lg z-20 w-72">
+                          <div className="p-2 border-b border-gray-100">
+                            <input
+                              type="text"
+                              placeholder="Search tags..."
+                              value={tagSearch}
+                              onChange={e => setTagSearch(e.target.value)}
+                              className="w-full border border-gray-200 rounded-md px-2.5 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                              autoFocus
+                            />
+                          </div>
+                          <div className="flex border-b border-gray-100">
+                            <button
+                              onClick={selectAllTags}
+                              className="flex-1 px-3 py-2 text-xs font-medium text-blue-600 hover:bg-blue-50 transition-colors"
+                            >
+                              Select All
+                            </button>
+                            <div className="w-px bg-gray-100" />
+                            <button
+                              onClick={clearAllTags}
+                              className="flex-1 px-3 py-2 text-xs font-medium text-gray-500 hover:bg-gray-50 transition-colors"
+                            >
+                              Clear
+                            </button>
+                          </div>
+                          <div className="max-h-56 overflow-y-auto">
+                            {tags.length === 0 ? (
+                              <div className="px-3 py-4 text-sm text-gray-400 text-center">No tags found</div>
+                            ) : filteredTags.length === 0 ? (
+                              <div className="px-3 py-4 text-sm text-gray-400 text-center">No matches</div>
+                            ) : (
+                              filteredTags.map(t => (
+                                <label key={t.id} className="flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedTagIds.has(t.id)}
+                                    onChange={() => toggleTag(t.id)}
+                                    className="rounded"
+                                  />
+                                  <span className="flex-1 leading-snug">{t.name}</span>
+                                </label>
+                              ))
+                            )}
+                          </div>
                         </div>
-                        <div className="flex border-b border-gray-100">
-                          <button
-                            onClick={selectAllTags}
-                            className="flex-1 px-3 py-2 text-xs font-medium text-blue-600 hover:bg-blue-50 transition-colors"
-                          >
-                            Select All
-                          </button>
-                          <div className="w-px bg-gray-100" />
-                          <button
-                            onClick={clearAllTags}
-                            className="flex-1 px-3 py-2 text-xs font-medium text-gray-500 hover:bg-gray-50 transition-colors"
-                          >
-                            Clear
-                          </button>
-                        </div>
-                        <div className="max-h-56 overflow-y-auto">
-                          {tags.length === 0 ? (
-                            <div className="px-3 py-4 text-sm text-gray-400 text-center">No tags found</div>
-                          ) : filteredTags.length === 0 ? (
-                            <div className="px-3 py-4 text-sm text-gray-400 text-center">No matches</div>
-                          ) : (
-                            filteredTags.map(t => (
-                              <label key={t.id} className="flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={selectedTagIds.has(t.id)}
-                                  onChange={() => toggleTag(t.id)}
-                                  className="rounded"
-                                />
-                                <span className="flex-1 leading-snug">{t.name}</span>
-                              </label>
-                            ))
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
             </div>
           </div>
         )}
 
-        {selectedInstance && (
+        {selectedInstance && selectedWorkspace && (
           <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
-            <h2 className="text-base font-semibold text-gray-800">Filters</h2>
+            <h2 className="text-base font-semibold text-gray-800">
+              Filters — <span className="text-blue-600">{selectedWorkspace.name}</span>
+            </h2>
             <div className="flex gap-4 flex-wrap items-end">
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">Mode</label>
@@ -832,7 +891,7 @@
           </div>
         )}
 
-        {!loading && leads.length === 0 && selectedInstance && !errorMsg && !progressStatus && (
+        {!loading && leads.length === 0 && selectedWorkspace && !errorMsg && !progressStatus && (
           <div className="bg-white rounded-xl border border-gray-200 p-12 text-center text-gray-400 text-sm">
             Select filters above and click Fetch Leads to get started.
           </div>
